@@ -1,5 +1,85 @@
 <?php
 
+namespace minor;
+
+interface IEntityActivator {
+    public function createInstances($entityName, $count = 1);
+}
+
+interface IEntityRelation {
+    public function getTargetEntityName();
+    public function getRelationFieldName();
+    public function getTargetFieldName();
+    public function getType();
+}
+
+interface IEntityStructure {
+    public function getFieldNames();
+    public function getFieldType($fieldName);
+
+    /**
+     * @param $relationName
+     * @return IEntityRelation
+     */
+    public function getRelation($relationName);
+}
+
+interface IDataStructure {
+    /**
+     * @param $entityName
+     * @return IEntityStructure
+     */
+    public function getEntityStructure($entityName);
+}
+
+class DataToObjectMapper {
+    protected $cachedResults = [];
+
+    /**
+     * @var IEntityActivator
+     */
+    protected $entityActivator;
+
+    /**
+     * @var IDataStructure
+     */
+    protected $dataStructure;
+
+    protected $sourceData;
+
+    protected $startEntityName;
+    protected $extraRelations = [];
+
+    protected $relPaths = [];
+
+    protected function createObjects($count) {
+        $objects = [
+            $this->entityActivator->createInstances($this->startEntityName, $count)
+        ];
+    }
+
+    protected function initRelPaths() {
+        $this->relPaths['.'] = [
+            'entityName' => $this->startEntityName,
+            'objectIdx' => 0,
+            'parentPath' => null,
+        ];
+        $objIdx = 1;
+        foreach ($this->extraRelations as $relName) {
+            $relPath = $relName;
+            while (!array_key_exists($relPath, $this->relPaths)) {
+                $p = strrpos($relPath, '.');
+                $parentPath = $p !== false ? substr($relPath, 0, $p) : '.';
+                $this->relPaths[$relPath] = [
+                    'objectIdx' => $objIdx++,
+                    'parentPath' => $parentPath,
+                ];
+                $relPath = $parentPath;
+            }
+        }
+    }
+}
+
 class Hydrator {
 
     /**
@@ -47,5 +127,11 @@ class Hydrator {
                 $targets[$tKey][$hf[1]]->$fld = $row[$hf[0]] ? true : false;
             }
         }
+    }
+}
+
+class ObjectFactory {
+    public function createObjects($entityName, array $relations, $count = 1) {
+
     }
 }
