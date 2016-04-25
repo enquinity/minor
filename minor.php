@@ -45,16 +45,62 @@ class DataToObjectMapper {
      */
     protected $dataStructure;
 
+    /**
+     * @var \Iterator
+     */
     protected $sourceData;
+    protected $sourceDataCount;
 
     protected $startEntityName;
     protected $extraRelations = [];
 
-    protected $relPaths = [];
+    protected $relPaths = null;
+
+    protected $segmentSize = 100;
+
+    protected function fetchNextSegment() {
+        $toFetch = $this->segmentSize;
+        // TODO: trzeba sprawdzić, ile rekordów pozostało w źródle danych
+        $objects = $this->createObjects($toFetch);
+        for ($toFetch = $this->segmentSize; $toFetch > 0 && $this->sourceData->valid(); $toFetch--, $this->sourceData->next()) {
+            $row = $this->sourceData->current();
+
+        }
+    }
 
     protected function createObjects($count) {
-        $objects = [
-            $this->entityActivator->createInstances($this->startEntityName, $count)
+        $objects = [];
+        foreach ($this->relPaths as $relPath => $info) {
+            $objects[$info['objectIdx']] = $this->entityActivator->createInstances($info['entityName'], $count);
+        }
+        foreach ($this->relPaths as $relPath => $info) {
+            if (empty($info['parentPath'])) continue;
+            $idxParent = $this->relPaths[$info['parentPath']]['objectIdx'];
+            $idxChild = $info['objectIdx'];
+            $parentFieldName = $info['localPath'];
+            for ($i = 0; $i < $count; $i++) {
+                $objects[$idxParent][$i]->$parentFieldName = $objects[$idxChild][$i];
+            }
+        }
+        return $objects;
+    }
+
+    private function calcRelInfo($relPath) {
+        $p = strrpos($relPath, '.');
+        $parentPath = $p !== false ? substr($relPath, 0, $p) : '.';
+        $localPath = $p !== false ? substr($relPath, $p + 1) : $relPath;
+
+        if (!array_key_exists($parentPath, $this->relPaths)) {
+            $this->calcRelInfo($parentPath);
+        }
+        $parentInfo = $this->relPaths[$parentPath];
+        $relation = $this->dataStructure->getEntityStructure($parentInfo['entityName'])->getRelation($localPath);
+
+        $this->relPaths[$relPath] = [
+            'entityName' => $relation->getTargetEntityName(),
+            'objectIdx' => count($this->relPaths),
+            'parentPath' => $parentPath,
+            'localPath' => $localPath,
         ];
     }
 
@@ -63,19 +109,11 @@ class DataToObjectMapper {
             'entityName' => $this->startEntityName,
             'objectIdx' => 0,
             'parentPath' => null,
+            'localPath' => $this->startEntityName,
         ];
-        $objIdx = 1;
         foreach ($this->extraRelations as $relName) {
-            $relPath = $relName;
-            while (!array_key_exists($relPath, $this->relPaths)) {
-                $p = strrpos($relPath, '.');
-                $parentPath = $p !== false ? substr($relPath, 0, $p) : '.';
-                $this->relPaths[$relPath] = [
-                    'objectIdx' => $objIdx++,
-                    'parentPath' => $parentPath,
-                ];
-                $relPath = $parentPath;
-            }
+            if (array_key_exists($relName, $this->relPaths)) continue;
+            $this->calcRelInfo($relName);
         }
     }
 }
@@ -130,8 +168,3 @@ class Hydrator {
     }
 }
 
-class ObjectFactory {
-    public function createObjects($entityName, array $relations, $count = 1) {
-
-    }
-}
