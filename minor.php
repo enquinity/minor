@@ -17,6 +17,9 @@ interface IEntityStructure {
     public function getFieldNames();
     public function getFieldType($fieldName);
 
+    public function getKeyFieldName();
+    public function hasComplexKey();
+
     /**
      * @param $relationName
      * @return IEntityRelation
@@ -49,12 +52,8 @@ class MapFieldsCalc {
     }
 }
 
-// todo: klasa bazowa plus 2 klasy pochodne - iterator i klasa do mapowania 1-dnego wiersza
-class DataToObjectsMapper implements \Iterator {
-    protected $segments = [];
-    protected $currentPos;
-    protected $currentSegment;
-    protected $currentSegmentPos;
+
+class BaseHydrator {
 
     /**
      * @var IEntityActivator
@@ -65,12 +64,6 @@ class DataToObjectsMapper implements \Iterator {
      * @var IDataStructure
      */
     protected $dataStructure;
-
-    /**
-     * @var \Iterator
-     */
-    protected $sourceData;
-    protected $sourceDataCount;
 
     /**
      * @var array
@@ -85,68 +78,10 @@ class DataToObjectsMapper implements \Iterator {
 
     protected $relPaths = null;
 
-    protected $segmentSize = 100;
-
     const ConversionNone = 0;
     const ConversionToInt = 1;
     const ConversionToFloat = 2;
     const ConversionToBool = 3;
-
-    /**
-     * DataToObjectsMapper constructor.
-     * @param IDataStructure $dataStructure
-     * @param \Iterator      $sourceData
-     * @param                $sourceDataCount
-     * @param array          $mapFields
-     * @param                $startEntityName
-     * @param null           $extraRelations
-     */
-    public function __construct(IDataStructure $dataStructure, \Iterator $sourceData, $sourceDataCount, array $mapFields, $startEntityName, $extraRelations = null) {
-        $this->dataStructure = $dataStructure;
-        $this->sourceData = $sourceData;
-        $this->sourceDataCount = $sourceDataCount;
-        $this->mapFields = $mapFields;
-        $this->startEntityName = $startEntityName;
-        $this->extraRelations = $extraRelations;
-    }
-
-    public function current() {
-        if (!$this->valid()) {
-            return null;
-        }
-        return $this->segments[$this->currentSegment][$this->currentSegmentPos];
-    }
-
-    public function next() {
-        $this->currentPos++;
-        $this->currentSegmentPos++;
-        if ($this->currentSegmentPos >= count($this->segments[$this->currentSegment])) {
-            $this->currentSegmentPos = 0;
-            $this->currentSegment++;
-            $this->ensureCurrentSegmentFetched();
-        }
-    }
-
-    public function key() {
-        return $this->currentPos;
-    }
-
-    public function valid() {
-        return $this->currentPos < $this->sourceDataCount;
-    }
-
-    public function rewind() {
-        $this->currentPos = 0;
-        $this->currentSegment = 0;
-        $this->currentSegmentPos = 0;
-        $this->ensureCurrentSegmentFetched();
-    }
-
-    protected function ensureCurrentSegmentFetched() {
-        if (count($this->segments) <= $this->currentSegment) {
-            $this->fetchNextSegment();
-        }
-    }
 
     protected function calcMapInstructions() {
         foreach ($this->mapFields as $mapField) {
@@ -157,31 +92,6 @@ class DataToObjectsMapper implements \Iterator {
             ];
             // TODO: zbadać typ pola i do odpowiedniego indeksu wpisać
         }
-    }
-
-    protected function fetchNextSegment() {
-        $toFetch = $this->segmentSize;
-        $remaining = $this->sourceDataCount - $this->currentPos;
-        if (0 == $remaining) return;
-        if ($toFetch > $remaining) $toFetch = $remaining;
-
-        $objects = $this->createObjects($toFetch);
-        for ($toFetch = $this->segmentSize; $toFetch > 0 && $this->sourceData->valid(); $toFetch--, $this->sourceData->next()) {
-            $row = $this->sourceData->current();
-            $objectNum = 0; // TODO: uzupełnić
-
-            foreach ($this->mapInstructions[self::ConversionNone] as $mapField) {
-                $field = $mapField[2];
-                $objects[$mapField[1]][$objectNum]->$field = $row[$mapField[0]];
-            }
-            // TODO: pozostałe konwersje
-        }
-        $this->segments[] = $objects[$this->relPaths['.']['objectIdx']];
-        // TODO: zrobić to w bardziej wydajny sposób
-        /*foreach ($objects[$this->relPaths['.']['objectIdx']] as $o) {
-            $this->results[] = $o;
-        }*/
-        //$this->results = array_merge($this->results, $objects[$this->relPaths['.']['objectIdx']]);
     }
 
     protected function createObjects($count) {
@@ -220,7 +130,7 @@ class DataToObjectsMapper implements \Iterator {
         ];
     }
 
-    protected function initRelPaths() {
+    protected function calcRelPaths() {
         $this->relPaths['.'] = [
             'entityName' => $this->startEntityName,
             'objectIdx' => 0,
@@ -248,53 +158,127 @@ class DataToObjectsMapper implements \Iterator {
     }
 }
 
-class Hydrator {
+class HydrateIterator extends BaseHydrator implements \Iterator {
+    protected $segments = [];
+    protected $currentPos;
+    protected $currentSegment;
+    protected $currentSegmentPos;
+
+    protected $segmentSize = 100;
 
     /**
-     * @var array
-     * Keys:
-     * 0: fields without conversion
-     * 1: fields with toInt conversion
-     * 2: fields with toFloat conversion
-     * 3: fields with toBool conversion
-     *
-     * Every field has keys:
-     * 0: source field key/index
-     * 1: destination object number
-     * 2: destination field name
+     * @var \Iterator
      */
-    protected $hydrateFields = [];
+    protected $sourceData;
+    protected $sourceDataCount;
 
-    const ConversionNone = 0;
-    const ConversionToInt = 1;
-    const ConversionToFloat = 2;
-    const ConversionToBool = 3;
+    public function __construct(IDataStructure $dataStructure, IEntityActivator $entityActivator, \Iterator $sourceData, $sourceDataCount, array $mapFields, $startEntityName, $extraRelations = null) {
+        $this->dataStructure = $dataStructure;
+        $this->entityActivator = $entityActivator;
+        $this->sourceData = $sourceData;
+        $this->sourceDataCount = $sourceDataCount;
+        $this->mapFields = $mapFields;
+        $this->startEntityName = $startEntityName;
+        $this->extraRelations = $extraRelations;
 
-    public function addHydrateField($sourceKey, $dstObjectNumber, $dstField, $conversion = self::ConversionNone) {
-        $this->hydrateFields[$conversion][] = [$sourceKey, $dstObjectNumber, $dstField];
+        $this->calcRelPaths();
+        $this->calcMapInstructions();
     }
 
-    public function hydrate(array $data, array $targets) {
-        $tKey = -1;
-        foreach ($data as $row) {
-            $tKey++;
-            foreach ($this->hydrateFields[0] as $hf) {
-                $fld = $hf[2];
-                $targets[$tKey][$hf[1]]->$fld = $row[$hf[0]];
-            }
-            foreach ($this->hydrateFields[1] as $hf) {
-                $fld = $hf[2];
-                $targets[$tKey][$hf[1]]->$fld = (int)$row[$hf[0]];
-            }
-            foreach ($this->hydrateFields[2] as $hf) {
-                $fld = $hf[2];
-                $targets[$tKey][$hf[1]]->$fld = (float)$row[$hf[0]];
-            }
-            foreach ($this->hydrateFields[3] as $hf) {
-                $fld = $hf[2];
-                $targets[$tKey][$hf[1]]->$fld = $row[$hf[0]] ? true : false;
-            }
+    /**
+     * @param int $segmentSize
+     * @return HydrateIterator
+     */
+    public function setSegmentSize($segmentSize) {
+        $this->segmentSize = $segmentSize;
+        return $this;
+    }
+
+    public function current() {
+        if (!$this->valid()) {
+            return null;
         }
+        return $this->segments[$this->currentSegment][$this->currentSegmentPos];
+    }
+
+    public function next() {
+        $this->currentPos++;
+        $this->currentSegmentPos++;
+        if ($this->currentSegmentPos >= count($this->segments[$this->currentSegment])) {
+            $this->currentSegmentPos = 0;
+            $this->currentSegment++;
+            $this->ensureCurrentSegmentFetched();
+        }
+    }
+
+    public function key() {
+        return $this->currentPos;
+    }
+
+    public function valid() {
+        return $this->currentPos < $this->sourceDataCount;
+    }
+
+    public function rewind() {
+        $this->sourceData->rewind();
+        $this->currentPos = 0;
+        $this->currentSegment = 0;
+        $this->currentSegmentPos = 0;
+        $this->ensureCurrentSegmentFetched();
+    }
+
+    protected function ensureCurrentSegmentFetched() {
+        if (count($this->segments) <= $this->currentSegment) {
+            $this->fetchNextSegment();
+        }
+    }
+
+    protected function fetchNextSegment() {
+        $toFetch = $this->segmentSize;
+        $remaining = $this->sourceDataCount - $this->currentPos;
+
+        if (0 == $remaining) return;
+        if ($toFetch > $remaining) $toFetch = $remaining;
+
+        $objects = $this->createObjects($toFetch);
+        for ($toFetch = $this->segmentSize, $objectNum = 0; $toFetch > 0 && $this->sourceData->valid(); $toFetch--, $objectNum++, $this->sourceData->next()) {
+            $row = $this->sourceData->current();
+
+            foreach ($this->mapInstructions[self::ConversionNone] as $mapField) {
+                $field = $mapField[2];
+                $objects[$mapField[1]][$objectNum]->$field = $row[$mapField[0]];
+            }
+            // TODO: pozostałe konwersje
+        }
+        $this->segments[] = $objects[$this->relPaths['.']['objectIdx']];
+        // TODO: zrobić to w bardziej wydajny sposób
+        /*foreach ($objects[$this->relPaths['.']['objectIdx']] as $o) {
+            $this->results[] = $o;
+        }*/
+        //$this->results = array_merge($this->results, $objects[$this->relPaths['.']['objectIdx']]);
     }
 }
 
+class ObjectHydrator extends BaseHydrator {
+
+    public function __construct(IDataStructure $dataStructure, IEntityActivator $entityActivator, array $mapFields, $startEntityName, $extraRelations = null) {
+        $this->dataStructure = $dataStructure;
+        $this->entityActivator = $entityActivator;
+        $this->mapFields = $mapFields;
+        $this->startEntityName = $startEntityName;
+        $this->extraRelations = $extraRelations;
+
+        $this->calcRelPaths();
+        $this->calcMapInstructions();
+    }
+
+    public function hydrate(array $row) {
+        $objects = $this->createObjects(1);
+        foreach ($this->mapInstructions[self::ConversionNone] as $mapField) {
+            $field = $mapField[2];
+            $objects[$mapField[1]][0]->$field = $row[$mapField[0]];
+        }
+        // TODO: pozostałe konwersje
+        return $objects[$this->relPaths['.']['objectIdx']][0];
+    }
+}
