@@ -26,6 +26,10 @@ interface IEntityActivator {
 }
 
 interface IEntityRelation {
+    const OneToOneType = 'oo';
+    const OneToManyType = 'om';
+    const ManyToOneType = 'mo';
+
     public function getTargetEntityName();
     public function getRelationFieldName();
     public function getTargetFieldName();
@@ -36,8 +40,14 @@ interface IEntityStructure {
     public function getFieldNames();
     public function getFieldType($fieldName);
 
-    //public function getKeyFieldName();
-    //public function hasComplexKey();
+    public function getKeyFieldName();
+    public function hasComplexKey();
+
+    /**
+     * Returns name of source for the entity - for instance name of table in database
+     * @return string
+     */
+    //public function getSourceName();
 
     /**
      * @param $relationName
