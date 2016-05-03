@@ -17,8 +17,8 @@ interface IEntityStructure {
     public function getFieldNames();
     public function getFieldType($fieldName);
 
-    public function getKeyFieldName();
-    public function hasComplexKey();
+    //public function getKeyFieldName();
+    //public function hasComplexKey();
 
     /**
      * @param $relationName
@@ -163,6 +163,7 @@ class HydrateIterator extends BaseHydrator implements \Iterator {
     protected $currentPos;
     protected $currentSegment;
     protected $currentSegmentPos;
+    protected $currentSegmentLength;
 
     protected $segmentSize = 100;
 
@@ -195,7 +196,7 @@ class HydrateIterator extends BaseHydrator implements \Iterator {
     }
 
     public function current() {
-        if (!$this->valid()) {
+        if ($this->currentPos >= $this->sourceDataCount) {
             return null;
         }
         return $this->segments[$this->currentSegment][$this->currentSegmentPos];
@@ -204,10 +205,14 @@ class HydrateIterator extends BaseHydrator implements \Iterator {
     public function next() {
         $this->currentPos++;
         $this->currentSegmentPos++;
-        if ($this->currentSegmentPos >= count($this->segments[$this->currentSegment])) {
+        if ($this->currentSegmentPos >= $this->currentSegmentLength) {
             $this->currentSegmentPos = 0;
             $this->currentSegment++;
-            $this->ensureCurrentSegmentFetched();
+            //$this->ensureCurrentSegmentFetched();
+            if (count($this->segments) <= $this->currentSegment) {
+                $this->fetchNextSegment();
+            }
+            $this->currentSegmentLength = $this->currentSegment < count($this->segments) ? count($this->segments[$this->currentSegment]) : 0;
         }
     }
 
@@ -224,14 +229,18 @@ class HydrateIterator extends BaseHydrator implements \Iterator {
         $this->currentPos = 0;
         $this->currentSegment = 0;
         $this->currentSegmentPos = 0;
-        $this->ensureCurrentSegmentFetched();
+        if (count($this->segments) == 0) {
+            $this->fetchNextSegment();
+        }
+        //$this->ensureCurrentSegmentFetched();
+        $this->currentSegmentLength = count($this->segments[$this->currentSegment]);
     }
 
-    protected function ensureCurrentSegmentFetched() {
+    /*protected function ensureCurrentSegmentFetched() {
         if (count($this->segments) <= $this->currentSegment) {
             $this->fetchNextSegment();
         }
-    }
+    }*/
 
     protected function fetchNextSegment() {
         $toFetch = $this->segmentSize;
@@ -241,7 +250,7 @@ class HydrateIterator extends BaseHydrator implements \Iterator {
         if ($toFetch > $remaining) $toFetch = $remaining;
 
         $objects = $this->createObjects($toFetch);
-        for ($toFetch = $this->segmentSize, $objectNum = 0; $toFetch > 0 && $this->sourceData->valid(); $toFetch--, $objectNum++, $this->sourceData->next()) {
+        for ($objectNum = 0; $toFetch > 0 && $this->sourceData->valid(); $toFetch--, $objectNum++, $this->sourceData->next()) {
             $row = $this->sourceData->current();
 
             foreach ($this->mapInstructions[self::ConversionNone] as $mapField) {
