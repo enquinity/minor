@@ -2,6 +2,25 @@
 
 namespace minor;
 
+class Type {
+    const Integer = 'integer';
+    const String = 'string';
+    const Float = 'float';
+    const Bool = 'bool';
+
+    public static function isInt($type) {
+        return 'integer' === $type || 'int' === $type;
+    }
+
+    public static function isFloat($type) {
+        return 'float' === $type;
+    }
+
+    public static function isBool($type) {
+        return 'bool' === $type || 'boolean' === $type;
+    }
+}
+
 interface IEntityActivator {
     public function createInstances($entityName, $count = 1);
 }
