@@ -72,6 +72,23 @@ interface IDataStructure {
     public function getEntityStructure($entityName);
 }
 
+interface IFieldMapper {
+    public function map($key, &$relationName, &$fieldName);
+}
+
+class StdFieldMapper implements IFieldMapper {
+    public function map($key, &$relationName, &$fieldName) {
+        $p = strrpos($key, '.');
+        if (false === $p) {
+            $relationName = '.';
+            $fieldName = $key;
+        } else {
+            $relationName = substr($key, 0, $p);
+            $fieldName = substr($key, $p + 1);
+        }
+    }
+}
+
 class MapFieldsCalc {
     public static function getMapFieldsFromColumnList(array $columnNames) {
         $mapFields = [];
