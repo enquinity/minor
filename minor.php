@@ -21,6 +21,14 @@ class Type {
     }
 }
 
+class ValueConversion {
+    const ConversionNone = 0;
+    const ConversionToInt = 1;
+    const ConversionToFloat = 2;
+    const ConversionToBool = 3;
+}
+
+
 interface IEntityActivator {
     public function createInstances($entityName, $count = 1);
 }
