@@ -76,6 +76,13 @@ interface IFieldMapper {
     public function map($key, &$relationName, &$fieldName);
 }
 
+interface IDataSetHydrator {
+    public function getTotalCount();
+    public function fetch($count);
+    //public function rewind();
+}
+
+
 class StdFieldMapper implements IFieldMapper {
     public function map($key, &$relationName, &$fieldName) {
         $p = strrpos($key, '.');
@@ -89,26 +96,7 @@ class StdFieldMapper implements IFieldMapper {
     }
 }
 
-class MapFieldsCalc {
-    public static function getMapFieldsFromColumnList(array $columnNames) {
-        $mapFields = [];
-        foreach ($columnNames as $columnName) {
-            $p = strrpos($columnName, '.');
-            if (false === $p) {
-                $mapFields[] = ['key' => $columnName, 'relation' => '.', 'fieldName' => $columnName];
-            } else {
-                $relation = substr($columnName, 0, $p);
-                $field = substr($columnName, $p + 1);
-                $mapFields[] = ['key' => $columnName, 'relation' => $relation, 'fieldName' => $field];
-            }
-        }
-        return $mapFields;
-    }
-}
-
-
-class BaseHydrator {
-
+trait TBaseDataSetHydrator {
     /**
      * @var IEntityActivator
      */
@@ -123,30 +111,33 @@ class BaseHydrator {
      * @var array
      * [['key' => source data key, 'relation' => relation name (.) for main entity, 'fieldName' => name object field source data key is to be mapped to]]
      */
-    protected $mapFields = [];
+    //protected $mapFields = [];
 
-    protected $mapInstructions = [];
+    /**
+     * @var IFieldMapper
+     */
+    protected $fieldMapper;
+
+    //protected $mapInstructions = [];
 
     protected $startEntityName;
     protected $extraRelations = null;
 
     protected $relPaths = null;
 
-    const ConversionNone = 0;
-    const ConversionToInt = 1;
-    const ConversionToFloat = 2;
-    const ConversionToBool = 3;
-
-    protected function calcMapInstructions() {
-        foreach ($this->mapFields as $mapField) {
-            $this->mapInstructions[self::ConversionNone][] = [
-                $mapField['key'],
-                $this->relPaths[$mapField['relation']]['objectIdx'],
-                $mapField['fieldName'],
+    /*protected function calcMapInstructions(array $sourceKeys) {
+        $relation = null;
+        $fieldName = null;
+        foreach ($sourceKeys as $sourceKey) {
+            $this->fieldMapper->map($sourceKey, $relation, $fieldName);
+            $this->mapInstructions[ValueConversion::ConversionNone][] = [
+                $sourceKey,
+                $this->relPaths[$relation]['objectIdx'],
+                $fieldName,
             ];
             // TODO: zbadać typ pola i do odpowiedniego indeksu wpisać
         }
-    }
+    }*/
 
     protected function createObjects($count) {
         $objects = [];
@@ -192,7 +183,7 @@ class BaseHydrator {
             'localPath' => $this->startEntityName,
         ];
         $extraRelations = $this->extraRelations;
-        if (null === $extraRelations) {
+        /*if (null === $extraRelations) {
             $er = [];
             foreach ($this->mapFields as $mapField) {
                 if ($mapField['relation'] != '.') {
@@ -202,7 +193,7 @@ class BaseHydrator {
             if (!empty($er)) {
                 $extraRelations = array_keys($er);
             }
-        }
+        }*/
         if (null !== $extraRelations) {
             foreach ($extraRelations as $relName) {
                 if (array_key_exists($relName, $this->relPaths)) continue;
@@ -212,136 +203,84 @@ class BaseHydrator {
     }
 }
 
-class HydrateIterator extends BaseHydrator implements \Iterator {
-    protected $segments = [];
-    protected $currentPos;
-    protected $currentSegment;
-    protected $currentSegmentPos;
-    protected $currentSegmentLength;
-
-    protected $segmentSize = 100;
+class PdoResultHydrator implements IDataSetHydrator {
+    use TBaseDataSetHydrator;
 
     /**
-     * @var \Iterator
+     * @var \PDOStatement
      */
-    protected $sourceData;
-    protected $sourceDataCount;
+    protected $pdoResult;
 
-    public function __construct(IDataStructure $dataStructure, IEntityActivator $entityActivator, \Iterator $sourceData, $sourceDataCount, array $mapFields, $startEntityName, $extraRelations = null) {
+    protected $fetchedCnt;
+    protected $totalCount;
+
+    //protected $sourceKeyNames;
+    protected $mapInstructions;
+
+    public function __construct(IDataStructure $dataStructure, IEntityActivator $entityActivator, IFieldMapper $fieldMapper, \PDOStatement $pdoResult, $startEntityName, $extraRelations = null) {
         $this->dataStructure = $dataStructure;
         $this->entityActivator = $entityActivator;
-        $this->sourceData = $sourceData;
-        $this->sourceDataCount = $sourceDataCount;
-        $this->mapFields = $mapFields;
         $this->startEntityName = $startEntityName;
-        $this->extraRelations = $extraRelations;
+        $this->fieldMapper = $fieldMapper;
+
+        $this->pdoResult = $pdoResult;
+        $this->fetchedCnt = 0;
+        $this->totalCount = $pdoResult->rowCount();
 
         $this->calcRelPaths();
-        $this->calcMapInstructions();
-    }
-
-    /**
-     * @param int $segmentSize
-     * @return HydrateIterator
-     */
-    public function setSegmentSize($segmentSize) {
-        $this->segmentSize = $segmentSize;
-        return $this;
-    }
-
-    public function current() {
-        if ($this->currentPos >= $this->sourceDataCount) {
-            return null;
+        //$this->sourceKeyNames = [];
+        $mapToRel = null;
+        $mapToField = null;
+        $this->mapInstructions = [];
+        if (null === $extraRelations) {
+            $er = [];
         }
-        return $this->segments[$this->currentSegment][$this->currentSegmentPos];
-    }
-
-    public function next() {
-        $this->currentPos++;
-        $this->currentSegmentPos++;
-        if ($this->currentSegmentPos >= $this->currentSegmentLength) {
-            $this->currentSegmentPos = 0;
-            $this->currentSegment++;
-            //$this->ensureCurrentSegmentFetched();
-            if (count($this->segments) <= $this->currentSegment) {
-                $this->fetchNextSegment();
+        for ($c = 0; $c < $pdoResult->columnCount(); $c++) {
+            $cm = $pdoResult->getColumnMeta($c);
+            $this->fieldMapper->map($cm['name'], $mapToRel, $mapToField);
+            $conv = ValueConversion::ConversionNone; // TODO: w zależności od typu pola
+            $this->mapInstructions[$conv][] = [
+                $c,
+                $this->relPaths[$mapToRel]['objectIdx'],
+                $mapToField,
+            ];
+            if (null === $extraRelations) {
+                $er[$mapToRel] = true;
             }
-            $this->currentSegmentLength = $this->currentSegment < count($this->segments) ? count($this->segments[$this->currentSegment]) : 0;
+            //$this->sourceKeyNames[] = $cm['name'];
         }
-    }
-
-    public function key() {
-        return $this->currentPos;
-    }
-
-    public function valid() {
-        return $this->currentPos < $this->sourceDataCount;
-    }
-
-    public function rewind() {
-        $this->sourceData->rewind();
-        $this->currentPos = 0;
-        $this->currentSegment = 0;
-        $this->currentSegmentPos = 0;
-        if (count($this->segments) == 0) {
-            $this->fetchNextSegment();
+        if (null === $extraRelations) {
+            $extraRelations = array_keys($er);
         }
-        //$this->ensureCurrentSegmentFetched();
-        $this->currentSegmentLength = count($this->segments[$this->currentSegment]);
+        $this->extraRelations = $extraRelations;
     }
 
-    /*protected function ensureCurrentSegmentFetched() {
-        if (count($this->segments) <= $this->currentSegment) {
-            $this->fetchNextSegment();
+    public function getTotalCount() {
+        return $this->totalCount;
+    }
+
+    public function fetch($count) {
+        if ($this->fetchedCnt + $count > $this->totalCount) {
+            $count = $this->totalCount - $this->fetchedCnt;
         }
-    }*/
 
-    protected function fetchNextSegment() {
-        $toFetch = $this->segmentSize;
-        $remaining = $this->sourceDataCount - $this->currentPos;
-
-        if (0 == $remaining) return;
-        if ($toFetch > $remaining) $toFetch = $remaining;
-
+        $toFetch = $count;
         $objects = $this->createObjects($toFetch);
-        for ($objectNum = 0; $toFetch > 0 && $this->sourceData->valid(); $toFetch--, $objectNum++, $this->sourceData->next()) {
-            $row = $this->sourceData->current();
+        for ($objectNum = 0; $toFetch > 0; $toFetch--, $objectNum++) {
+            $row = $this->pdoResult->fetch(\PDO::FETCH_NUM);
 
-            foreach ($this->mapInstructions[self::ConversionNone] as $mapField) {
+            foreach ($this->mapInstructions[ValueConversion::ConversionNone] as $mapField) {
                 $field = $mapField[2];
                 $objects[$mapField[1]][$objectNum]->$field = $row[$mapField[0]];
             }
             // TODO: pozostałe konwersje
         }
-        $this->segments[] = $objects[$this->relPaths['.']['objectIdx']];
-        // TODO: zrobić to w bardziej wydajny sposób
-        /*foreach ($objects[$this->relPaths['.']['objectIdx']] as $o) {
-            $this->results[] = $o;
-        }*/
-        //$this->results = array_merge($this->results, $objects[$this->relPaths['.']['objectIdx']]);
-    }
-}
 
-class ObjectHydrator extends BaseHydrator {
-
-    public function __construct(IDataStructure $dataStructure, IEntityActivator $entityActivator, array $mapFields, $startEntityName, $extraRelations = null) {
-        $this->dataStructure = $dataStructure;
-        $this->entityActivator = $entityActivator;
-        $this->mapFields = $mapFields;
-        $this->startEntityName = $startEntityName;
-        $this->extraRelations = $extraRelations;
-
-        $this->calcRelPaths();
-        $this->calcMapInstructions();
-    }
-
-    public function hydrate(array $row) {
-        $objects = $this->createObjects(1);
-        foreach ($this->mapInstructions[self::ConversionNone] as $mapField) {
-            $field = $mapField[2];
-            $objects[$mapField[1]][0]->$field = $row[$mapField[0]];
+        $this->fetchedCnt += $count;
+        if ($this->fetchedCnt >= $this->totalCount) {
+            $this->pdoResult->closeCursor();
         }
-        // TODO: pozostałe konwersje
-        return $objects[$this->relPaths['.']['objectIdx']][0];
+
+        return $objects[$this->relPaths['.']['objectIdx']];
     }
 }
