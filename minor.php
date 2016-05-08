@@ -94,6 +94,14 @@ class StdFieldMapper implements IFieldMapper {
             $fieldName = substr($key, $p + 1);
         }
     }
+
+    private static $instance = null;
+    public static function instance() {
+        if (null === self::$instance) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
 }
 
 trait TBaseDataSetHydrator {
@@ -183,17 +191,6 @@ trait TBaseDataSetHydrator {
             'localPath' => $this->startEntityName,
         ];
         $extraRelations = $this->extraRelations;
-        /*if (null === $extraRelations) {
-            $er = [];
-            foreach ($this->mapFields as $mapField) {
-                if ($mapField['relation'] != '.') {
-                    $er[$mapField['relation']] = true;
-                }
-            }
-            if (!empty($er)) {
-                $extraRelations = array_keys($er);
-            }
-        }*/
         if (null !== $extraRelations) {
             foreach ($extraRelations as $relName) {
                 if (array_key_exists($relName, $this->relPaths)) continue;
@@ -231,15 +228,19 @@ class PdoResultHydrator implements IDataSetHydrator {
         //$this->sourceKeyNames = [];
         $mapToRel = null;
         $mapToField = null;
-        $this->mapInstructions = [];
+        $this->mapInstructions = [[], [], [], []];
         if (null === $extraRelations) {
             $er = [];
         }
         for ($c = 0; $c < $pdoResult->columnCount(); $c++) {
             $cm = $pdoResult->getColumnMeta($c);
             $this->fieldMapper->map($cm['name'], $mapToRel, $mapToField);
-            $conv = ValueConversion::ConversionNone; // TODO: w zależności od typu pola
-            $this->mapInstructions[$conv][] = [
+            $fieldType = $this->dataStructure->getEntityStructure($this->relPaths[$mapToRel]['entityName'])->getFieldType($mapToField);
+            $conversion = ValueConversion::ConversionNone;
+            if (Type::isBool($fieldType)) $conversion = ValueConversion::ConversionToBool;
+            elseif (Type::isInt($fieldType)) $conversion = ValueConversion::ConversionToInt;
+            elseif (Type::isFloat($fieldType)) $conversion = ValueConversion::ConversionToFloat;
+            $this->mapInstructions[$conversion][] = [
                 $c,
                 $this->relPaths[$mapToRel]['objectIdx'],
                 $mapToField,
@@ -273,7 +274,18 @@ class PdoResultHydrator implements IDataSetHydrator {
                 $field = $mapField[2];
                 $objects[$mapField[1]][$objectNum]->$field = $row[$mapField[0]];
             }
-            // TODO: pozostałe konwersje
+            foreach ($this->mapInstructions[ValueConversion::ConversionToInt] as $mapField) {
+                $field = $mapField[2];
+                $objects[$mapField[1]][$objectNum]->$field = (int)$row[$mapField[0]];
+            }
+            foreach ($this->mapInstructions[ValueConversion::ConversionToFloat] as $mapField) {
+                $field = $mapField[2];
+                $objects[$mapField[1]][$objectNum]->$field = (float)$row[$mapField[0]];
+            }
+            foreach ($this->mapInstructions[ValueConversion::ConversionToBool] as $mapField) {
+                $field = $mapField[2];
+                $objects[$mapField[1]][$objectNum]->$field = (bool)$row[$mapField[0]];
+            }
         }
 
         $this->fetchedCnt += $count;
@@ -282,5 +294,119 @@ class PdoResultHydrator implements IDataSetHydrator {
         }
 
         return $objects[$this->relPaths['.']['objectIdx']];
+    }
+}
+
+
+class DirectHydrateIterator implements \Iterator {
+    /**
+     * @var IDataSetHydrator
+     */
+    protected $hydrator;
+
+    protected $current;
+    protected $total;
+    protected $pos;
+
+    public function __construct(IDataSetHydrator $hydrator) {
+        $this->hydrator = $hydrator;
+    }
+
+    public function current() {
+        return $this->current;
+    }
+
+    public function next() {
+        $this->current = $this->hydrator->fetch(1);
+        $this->current = $this->current[0];
+        $this->pos++;
+    }
+
+    public function key() {
+        return $this->pos;
+    }
+
+    public function valid() {
+        return $this->pos < $this->total;
+    }
+
+    public function rewind() {
+        $this->total = $this->hydrator->getTotalCount();
+        $this->pos = 0;
+        if ($this->total > 0) {
+            $this->current = $this->hydrator->fetch(1);
+            $this->current = $this->current[0];
+        } else {
+            $this->current = null;
+        }
+    }
+}
+
+class SequentialHydrateIterator implements \Iterator {
+    /**
+     * @var IDataSetHydrator
+     */
+    protected $hydrator;
+
+    protected $totalCount;
+    protected $segments = [];
+    protected $currentPos;
+    protected $currentSegment;
+    protected $currentSegmentPos;
+    protected $currentSegmentLength;
+
+    protected $segmentSize = 100;
+
+    public function __construct(IDataSetHydrator $hydrator) {
+        $this->hydrator = $hydrator;
+        $this->totalCount = $hydrator->getTotalCount();
+    }
+
+    /**
+     * @param int $segmentSize
+     * @return $this
+     */
+    public function setSegmentSize($segmentSize) {
+        $this->segmentSize = $segmentSize;
+        return $this;
+    }
+
+    public function current() {
+        if ($this->currentPos >= $this->totalCount) {
+            return null;
+        }
+        return $this->segments[$this->currentSegment][$this->currentSegmentPos];
+    }
+
+    public function next() {
+        $this->currentPos++;
+        $this->currentSegmentPos++;
+        if ($this->currentSegmentPos >= $this->currentSegmentLength) {
+            $this->currentSegmentPos = 0;
+            $this->currentSegment++;
+            //$this->ensureCurrentSegmentFetched();
+            if (count($this->segments) <= $this->currentSegment && $this->currentPos < $this->totalCount) {
+                $this->segments[] = $this->hydrator->fetch($this->segmentSize);
+            }
+            $this->currentSegmentLength = $this->currentSegment < count($this->segments) ? count($this->segments[$this->currentSegment]) : 0;
+        }
+    }
+
+    public function key() {
+        return $this->currentPos;
+    }
+
+    public function valid() {
+        return $this->currentPos < $this->totalCount;
+    }
+
+    public function rewind() {
+        $this->currentPos = 0;
+        $this->currentSegment = 0;
+        $this->currentSegmentPos = 0;
+        if (count($this->segments) == 0 && $this->totalCount > 0) {
+            $this->segments[] = $this->hydrator->fetch($this->segmentSize);
+        }
+        $this->currentSegmentLength = count($this->segments[$this->currentSegment]);
     }
 }
