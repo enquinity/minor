@@ -104,6 +104,24 @@ class StdFieldMapper implements IFieldMapper {
     }
 }
 
+class StdEntityActivator implements IEntityActivator {
+    public function createInstances($entityId, $count = 1) {
+        $o = [];
+        while ($count-- > 0) {
+            $o[] = new $entityId();
+        }
+        return $o;
+    }
+
+    private static $instance = null;
+    public static function instance() {
+        if (null === self::$instance) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+}
+
 trait TBaseDataSetHydrator {
     /**
      * @var IEntityActivator
