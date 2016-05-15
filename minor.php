@@ -30,7 +30,7 @@ class ValueConversion {
 
 
 interface IEntityActivator {
-    public function createInstances($entityName, $count = 1);
+    public function createInstances($entityId, $count = 1);
 }
 
 interface IEntityRelation {
@@ -38,7 +38,7 @@ interface IEntityRelation {
     const OneToManyType = 'om';
     const ManyToOneType = 'mo';
 
-    public function getTargetEntityName();
+    public function getTargetEntityId();
     public function getRelationFieldName();
     public function getTargetFieldName();
     public function getType();
@@ -66,10 +66,10 @@ interface IEntityStructure {
 
 interface IDataStructure {
     /**
-     * @param $entityName
+     * @param $entityId
      * @return IEntityStructure
      */
-    public function getEntityStructure($entityName);
+    public function getEntityStructure($entityId);
 }
 
 interface IFieldMapper {
@@ -128,7 +128,7 @@ trait TBaseDataSetHydrator {
 
     //protected $mapInstructions = [];
 
-    protected $startEntityName;
+    protected $startEntityId;
     protected $extraRelations = null;
 
     protected $relPaths = null;
@@ -150,7 +150,7 @@ trait TBaseDataSetHydrator {
     protected function createObjects($count) {
         $objects = [];
         foreach ($this->relPaths as $relPath => $info) {
-            $objects[$info['objectIdx']] = $this->entityActivator->createInstances($info['entityName'], $count);
+            $objects[$info['objectIdx']] = $this->entityActivator->createInstances($info['entityId'], $count);
         }
         foreach ($this->relPaths as $relPath => $info) {
             if (empty($info['parentPath'])) continue;
@@ -173,10 +173,10 @@ trait TBaseDataSetHydrator {
             $this->calcRelInfo($parentPath);
         }
         $parentInfo = $this->relPaths[$parentPath];
-        $relation = $this->dataStructure->getEntityStructure($parentInfo['entityName'])->getRelation($localPath);
+        $relation = $this->dataStructure->getEntityStructure($parentInfo['entityId'])->getRelation($localPath);
 
         $this->relPaths[$relPath] = [
-            'entityName' => $relation->getTargetEntityName(),
+            'entityId' => $relation->getTargetEntityId(),
             'objectIdx' => count($this->relPaths),
             'parentPath' => $parentPath,
             'localPath' => $localPath,
@@ -185,10 +185,10 @@ trait TBaseDataSetHydrator {
 
     protected function calcRelPaths() {
         $this->relPaths['.'] = [
-            'entityName' => $this->startEntityName,
+            'entityId' => $this->startEntityId,
             'objectIdx' => 0,
             'parentPath' => null,
-            'localPath' => $this->startEntityName,
+            'localPath' => $this->startEntityId,
         ];
         $extraRelations = $this->extraRelations;
         if (null !== $extraRelations) {
@@ -214,10 +214,10 @@ class PdoResultHydrator implements IDataSetHydrator {
     //protected $sourceKeyNames;
     protected $mapInstructions;
 
-    public function __construct(IDataStructure $dataStructure, IEntityActivator $entityActivator, IFieldMapper $fieldMapper, \PDOStatement $pdoResult, $startEntityName, $extraRelations = null) {
+    public function __construct(IDataStructure $dataStructure, IEntityActivator $entityActivator, IFieldMapper $fieldMapper, \PDOStatement $pdoResult, $startEntityId, $extraRelations = null) {
         $this->dataStructure = $dataStructure;
         $this->entityActivator = $entityActivator;
-        $this->startEntityName = $startEntityName;
+        $this->startEntityId = $startEntityId;
         $this->fieldMapper = $fieldMapper;
 
         $this->pdoResult = $pdoResult;
@@ -235,7 +235,7 @@ class PdoResultHydrator implements IDataSetHydrator {
         for ($c = 0; $c < $pdoResult->columnCount(); $c++) {
             $cm = $pdoResult->getColumnMeta($c);
             $this->fieldMapper->map($cm['name'], $mapToRel, $mapToField);
-            $fieldType = $this->dataStructure->getEntityStructure($this->relPaths[$mapToRel]['entityName'])->getFieldType($mapToField);
+            $fieldType = $this->dataStructure->getEntityStructure($this->relPaths[$mapToRel]['entityId'])->getFieldType($mapToField);
             $conversion = ValueConversion::ConversionNone;
             if (Type::isBool($fieldType)) $conversion = ValueConversion::ConversionToBool;
             elseif (Type::isInt($fieldType)) $conversion = ValueConversion::ConversionToInt;
@@ -355,11 +355,12 @@ class SequentialHydrateIterator implements \Iterator {
     protected $currentSegmentPos;
     protected $currentSegmentLength;
 
-    protected $segmentSize = 100;
+    protected $segmentSize;
 
-    public function __construct(IDataSetHydrator $hydrator) {
+    public function __construct(IDataSetHydrator $hydrator, $segmentSize = 100) {
         $this->hydrator = $hydrator;
         $this->totalCount = $hydrator->getTotalCount();
+        $this->segmentSize = $segmentSize;
     }
 
     /**
