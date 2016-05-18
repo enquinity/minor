@@ -2,9 +2,9 @@
 namespace minnotations;
 
 interface IObjectAnnotations {
-    public function hasAnnotation($annotationName);
-    public function getValue($annotationName);
-    public function getValues($annotationName);
+    public function hasAnnotation($annotationName, $namespace = null);
+    public function getValue($annotationName, $namespace = null);
+    public function getValues($annotationName, $namespace = null);
     public function getAllAsArray();
 }
 
@@ -37,15 +37,27 @@ class StdObjectAnnotations implements IObjectAnnotations {
         $this->docComment = $docComment;
     }
 
-    public function getValue($annotationName) {
+    public function getValue($annotationName, $namespace = null) {
         if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment);
+        if (null !== $namespace) {
+            $ans = $namespace . ':' . $annotationName;
+            if (isset($this->annotations[$ans])) {
+                return is_array($this->annotations[$ans]) ? reset($this->annotations[$ans]) : $this->annotations[$ans];
+            }
+        }
         if (!isset($this->annotations[$annotationName])) return null;
         if (is_array($this->annotations[$annotationName])) return reset($this->annotations[$annotationName]);
         return $this->annotations[$annotationName];
     }
 
-    public function getValues($annotationName) {
+    public function getValues($annotationName, $namespace = null) {
         if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment);
+        if (null !== $namespace) {
+            $ans = $namespace . ':' . $annotationName;
+            if (isset($this->annotations[$ans])) {
+                return $this->annotations[$ans];
+            }
+        }
         if (!isset($this->annotations[$annotationName])) return [];
         return $this->annotations[$annotationName];
     }
@@ -85,8 +97,14 @@ class StdObjectAnnotations implements IObjectAnnotations {
         return $annotations;
     }
 
-    public function hasAnnotation($annotationName) {
+    public function hasAnnotation($annotationName, $namespace = null) {
         if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment);
+        if (null !== $namespace) {
+            $ans = $namespace . ':' . $annotationName;
+            if (isset($this->annotations[$ans])) {
+                return true;
+            }
+        }
         return isset($this->annotations[$annotationName]);
     }
 }

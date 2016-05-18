@@ -55,8 +55,8 @@ class ReflectionBasedEntityStructure implements IEntityStructure {
         foreach ($rc->getProperties(\ReflectionProperty::IS_PUBLIC) as $property) {
             $fieldName = $property->getName();
             $fa = $this->annotations->forProperty($this->className, $fieldName);
-            if ($fa->hasAnnotation('relation')) {
-                $target = $fa->getValue('var');
+            if ($fa->hasAnnotation('relation', 'minor')) {
+                $target = $fa->getValue('var', 'minor');
                 if (empty($target)) {
                     throw new \Exception("Invalid relation delaration for class $this->className property $fieldName - missing @var tag");
                 }
@@ -69,7 +69,7 @@ class ReflectionBasedEntityStructure implements IEntityStructure {
                     // pomijamy pierwszy \\
                     $target = substr($target, 1);
                 }
-                $value = $fa->getValue('relation');
+                $value = $fa->getValue('relation', 'minor');
                 static $symbols = ['->', '<-', '<->'];
                 static $types = [IEntityRelation::ManyToOneType, IEntityRelation::OneToManyType, IEntityRelation::OneToOneType];
 
@@ -90,7 +90,7 @@ class ReflectionBasedEntityStructure implements IEntityStructure {
                 continue;
             }
             $fieldNames[] = $fieldName;
-            if (true == $fa->getValue('key')) {
+            if (true == $fa->getValue('key', 'minor')) {
                 if (null === $this->key) $this->key = $fieldName;
                 elseif (!is_array($this->key)) $this->key = [$this->key, $fieldName];
                 else $this->key[] = $fieldName;
@@ -105,7 +105,7 @@ class ReflectionBasedEntityStructure implements IEntityStructure {
 
     public function getFieldType($fieldName) {
         $fieldAnnotations = $this->annotations->forProperty($this->className, $fieldName);
-        $type = $fieldAnnotations->getValue('var');
+        $type = $fieldAnnotations->getValue('var', 'minor');
         if (null === $type) $type = 'string';
         return $type;
     }
