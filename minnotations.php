@@ -2,10 +2,9 @@
 namespace minnotations;
 
 interface IObjectAnnotations {
-    public function hasAnnotation($annotationName, $namespace = null);
-    public function getValue($annotationName, $namespace = null);
-    public function getValues($annotationName, $namespace = null);
-    public function getAllAsArray();
+    public function hasAnnotation($namespace, $annotationName);
+    public function getValue($namespace, $annotationName);
+    public function getValues($namespace, $annotationName);
 }
 
 interface IMinnotations {
@@ -33,41 +32,71 @@ class StdObjectAnnotations implements IObjectAnnotations {
     protected $docComment;
     protected $annotations;
 
-    public function __construct($docComment) {
+    /**
+     * Namespace aliases in form alias => namespace name
+     * @var array
+     */
+    protected $nsAliases;
+
+    /**
+     * For this namespaces class will process only annotations strictly defined in that namespace without fallback
+     * to global namespace.
+     *
+     * @var array
+     * Assoc array as namespace name => true
+     */
+    protected $strictNamespaces;
+
+    public function __construct($docComment, $nsAliases, $strictNamespaces) {
         $this->docComment = $docComment;
+        $this->nsAliases = $nsAliases;
+        $this->strictNamespaces = $strictNamespaces;
     }
 
-    public function getValue($annotationName, $namespace = null) {
-        if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment);
-        if (null !== $namespace) {
-            $ans = $namespace . ':' . $annotationName;
-            if (isset($this->annotations[$ans])) {
-                return is_array($this->annotations[$ans]) ? reset($this->annotations[$ans]) : $this->annotations[$ans];
-            }
+    public function getValue($namespace, $annotationName) {
+        if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment, $this->nsAliases);
+
+        if (isset($this->annotations[$namespace]) && isset($this->annotations[$namespace][$annotationName])) {
+            $value = $this->annotations[$namespace][$annotationName];
+            return is_array($value) ? reset($value) : $value;
         }
-        if (!isset($this->annotations[$annotationName])) return null;
-        if (is_array($this->annotations[$annotationName])) return reset($this->annotations[$annotationName]);
-        return $this->annotations[$annotationName];
-    }
-
-    public function getValues($annotationName, $namespace = null) {
-        if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment);
-        if (null !== $namespace) {
-            $ans = $namespace . ':' . $annotationName;
-            if (isset($this->annotations[$ans])) {
-                return $this->annotations[$ans];
-            }
+        // fallback to global namespace if possible
+        if (empty($this->strictNamespaces[$namespace]) && isset($this->annotations[':global']) && isset($this->annotations[':global'][$annotationName])) {
+            $value = $this->annotations[':global'][$annotationName];
+            return is_array($value) ? reset($value) : $value;
         }
-        if (!isset($this->annotations[$annotationName])) return [];
-        return $this->annotations[$annotationName];
+        return null;
     }
 
-    public function getAllAsArray() {
-        if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment);
-        return $this->annotations;
+    public function getValues($namespace, $annotationName) {
+        if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment, $this->nsAliases);
+
+        if (isset($this->annotations[$namespace]) && isset($this->annotations[$namespace][$annotationName])) {
+            $value = $this->annotations[$namespace][$annotationName];
+            return is_array($value) ? $value : [$value];
+        }
+        // fallback to global namespace if possible
+        if (empty($this->strictNamespaces[$namespace]) && isset($this->annotations[':global']) && isset($this->annotations[':global'][$annotationName])) {
+            $value = $this->annotations[':global'][$annotationName];
+            return is_array($value) ? $value : [$value];
+        }
+        return null;
     }
 
-    public static function fetchAnnotations($docComment) {
+    public function hasAnnotation($namespace, $annotationName) {
+        if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment, $this->nsAliases);
+
+        if (isset($this->annotations[$namespace]) && isset($this->annotations[$namespace][$annotationName])) {
+            return true;
+        }
+        // fallback to global namespace if possible
+        if (empty($this->strictNamespaces[$namespace]) && isset($this->annotations[':global']) && isset($this->annotations[':global'][$annotationName])) {
+            return true;
+        }
+        return false;
+    }
+
+    public static function fetchAnnotations($docComment, $nsAliases = []) {
         if (empty($docComment)) return [];
         $annotations = [];
         for ($pos = 0; true;) {
@@ -85,27 +114,25 @@ class StdObjectAnnotations implements IObjectAnnotations {
                 $aValue = trim(substr($annotation, $ps + 1));
                 if (empty($aValue)) $aValue = true;
             }
-            if (!isset($annotations[$aName])) {
-                $annotations[$aName] = $aValue;
+            $ns = ':global';
+            $pns = strpos($aName, ':');
+            if (false !== $pns) {
+                $ns = substr($aName, 0, $pns);
+                $aName = substr($aName, $pns + 1);
+
+                if (isset($nsAliases[$ns])) $ns = $nsAliases[$ns];
+            }
+            if (!isset($annotations[$ns])) $annotations[$ns] = [];
+            if (!isset($annotations[$ns][$aName])) {
+                $annotations[$ns][$aName] = $aValue;
             } else {
-                if (!is_array($annotations[$aName])) $annotations[$aName] = [$annotations[$aName]];
-                $annotations[$aName][] = $aValue;
+                if (!is_array($annotations[$ns][$aName])) $annotations[$ns][$aName] = [$annotations[$aName]];
+                $annotations[$ns][$aName][] = $aValue;
             }
             if (false === $p2) break;
             $pos = $p2 + 1;
         }
         return $annotations;
-    }
-
-    public function hasAnnotation($annotationName, $namespace = null) {
-        if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment);
-        if (null !== $namespace) {
-            $ans = $namespace . ':' . $annotationName;
-            if (isset($this->annotations[$ans])) {
-                return true;
-            }
-        }
-        return isset($this->annotations[$annotationName]);
     }
 }
 
@@ -113,6 +140,29 @@ class SimpleMinnotations implements IMinnotations {
 
     protected $reflectionClassesByName = [];
     protected $cache = [];
+
+    /**
+     * Namespace aliases in form alias => namespace name
+     * @var array
+     */
+    protected $nsAliases = [];
+
+    /**
+     * For this namespaces class will process only annotations strictly defined in that namespace without fallback
+     * to global namespace.
+     *
+     * @var array
+     * Assoc array as namespace name => true
+     */
+    protected $strictNamespaces = [];
+
+    public function addNamespaceAlias($namespace, $alias) {
+        $this->nsAliases[$alias] = $namespace;
+    }
+
+    public function setNamespaceStrictMode($namespace) {
+        $this->strictNamespaces[$namespace] = true;
+    }
 
     /**
      * @return \ReflectionClass
@@ -128,7 +178,7 @@ class SimpleMinnotations implements IMinnotations {
         $cacheKey = 'cls:' . $className;
         if (!isset($this->cache[$cacheKey])) {
             $rc = $this->getReflectionClass($className);
-            $this->cache[$cacheKey] = new StdObjectAnnotations($rc->getDocComment());
+            $this->cache[$cacheKey] = new StdObjectAnnotations($rc->getDocComment(), $this->nsAliases, $this->strictNamespaces);
         }
         return $this->cache[$cacheKey];
     }
@@ -137,7 +187,7 @@ class SimpleMinnotations implements IMinnotations {
         $cacheKey = 'mth:' . $className . ';' . $methodName;
         if (!isset($this->cache[$cacheKey])) {
             $rc = $this->getReflectionClass($className)->getMethod($methodName);
-            $this->cache[$cacheKey] = new StdObjectAnnotations($rc->getDocComment());
+            $this->cache[$cacheKey] = new StdObjectAnnotations($rc->getDocComment(), $this->nsAliases, $this->strictNamespaces);
         }
         return $this->cache[$cacheKey];
     }
@@ -146,7 +196,7 @@ class SimpleMinnotations implements IMinnotations {
         $cacheKey = 'prop:' . $className . ';' . $propertyName;
         if (!isset($this->cache[$cacheKey])) {
             $rc = $this->getReflectionClass($className)->getProperty($propertyName);
-            $this->cache[$cacheKey] = new StdObjectAnnotations($rc->getDocComment());
+            $this->cache[$cacheKey] = new StdObjectAnnotations($rc->getDocComment(), $this->nsAliases, $this->strictNamespaces);
         }
         return $this->cache[$cacheKey];
     }
