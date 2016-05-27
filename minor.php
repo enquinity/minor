@@ -147,7 +147,7 @@ trait TBaseDataSetHydrator {
     //protected $mapInstructions = [];
 
     protected $startEntityId;
-    protected $extraRelations = null;
+    //protected $extraRelations = null;
 
     protected $relPaths = null;
 
@@ -201,7 +201,22 @@ trait TBaseDataSetHydrator {
         ];
     }
 
-    protected function calcRelPaths() {
+    protected function initRelPaths() {
+        $this->relPaths['.'] = [
+            'entityId' => $this->startEntityId,
+            'objectIdx' => 0,
+            'parentPath' => null,
+            'localPath' => $this->startEntityId,
+        ];
+    }
+
+    protected function addRelPath($relPath) {
+        if (!isset($this->relPaths[$relPath])) {
+            $this->calcRelInfo($relPath);
+        }
+    }
+
+    /*protected function calcRelPaths() {
         $this->relPaths['.'] = [
             'entityId' => $this->startEntityId,
             'objectIdx' => 0,
@@ -215,7 +230,7 @@ trait TBaseDataSetHydrator {
                 $this->calcRelInfo($relName);
             }
         }
-    }
+    }*/
 }
 
 class PdoResultHydrator implements IDataSetHydrator {
@@ -242,17 +257,24 @@ class PdoResultHydrator implements IDataSetHydrator {
         $this->fetchedCnt = 0;
         $this->totalCount = $pdoResult->rowCount();
 
-        $this->calcRelPaths();
+        //$this->calcRelPaths();
+        $this->initRelPaths();
         //$this->sourceKeyNames = [];
         $mapToRel = null;
         $mapToField = null;
         $this->mapInstructions = [[], [], [], []];
-        if (null === $extraRelations) {
-            $er = [];
+        if (null !== $extraRelations) {
+            foreach ($extraRelations as $er) {
+                $this->addRelPath($er);
+            }
         }
         for ($c = 0; $c < $pdoResult->columnCount(); $c++) {
             $cm = $pdoResult->getColumnMeta($c);
             $this->fieldMapper->map($cm['name'], $mapToRel, $mapToField);
+            if (!isset($this->relPaths[$mapToRel])) {
+                $this->addRelPath($mapToRel);
+            }
+
             $fieldType = $this->dataStructure->getEntityStructure($this->relPaths[$mapToRel]['entityId'])->getFieldType($mapToField);
             $conversion = ValueConversion::ConversionNone;
             if (Type::isBool($fieldType)) $conversion = ValueConversion::ConversionToBool;
@@ -263,15 +285,15 @@ class PdoResultHydrator implements IDataSetHydrator {
                 $this->relPaths[$mapToRel]['objectIdx'],
                 $mapToField,
             ];
-            if (null === $extraRelations) {
+            /*if (null === $extraRelations) {
                 $er[$mapToRel] = true;
-            }
+            }*/
             //$this->sourceKeyNames[] = $cm['name'];
         }
-        if (null === $extraRelations) {
+        /*if (null === $extraRelations) {
             $extraRelations = array_keys($er);
         }
-        $this->extraRelations = $extraRelations;
+        $this->extraRelations = $extraRelations;*/
     }
 
     public function getTotalCount() {
