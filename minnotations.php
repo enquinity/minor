@@ -27,9 +27,13 @@ interface IMinnotations {
     public function forProperty($className, $propertyName);
 }
 
+interface ICache {
+    public function get($cacheKey, $property, $calcCallback);
+}
 
 class StdObjectAnnotations implements IObjectAnnotations {
-    protected $docComment;
+    //protected $docComment;
+    protected $getDocCommentCallback;
     protected $annotations;
 
     /**
@@ -47,14 +51,34 @@ class StdObjectAnnotations implements IObjectAnnotations {
      */
     protected $strictNamespaces;
 
-    public function __construct($docComment, $nsAliases, $strictNamespaces) {
-        $this->docComment = $docComment;
+    /**
+     * @var ICache
+     */
+    protected $cache;
+    protected $cacheKey;
+
+    public function __construct($getDocCommentCallback, $nsAliases, $strictNamespaces, ICache $cache = null, $cacheKey = null) {
+        //$this->docComment = $docComment;
+        $this->getDocCommentCallback = $getDocCommentCallback;
         $this->nsAliases = $nsAliases;
         $this->strictNamespaces = $strictNamespaces;
+        $this->cache = $cache;
+        $this->cacheKey = $cacheKey;
+    }
+
+    private function loadAnnotations() {
+        if (null === $this->cache) {
+            $this->annotations = self::fetchAnnotations(call_user_func($this->getDocCommentCallback), $this->nsAliases);
+        } else {
+            $this->annotations = $this->cache->get($this->cacheKey, 'a', function() {
+                return self::fetchAnnotations(call_user_func($this->getDocCommentCallback), $this->nsAliases);
+            });
+        }
     }
 
     public function getValue($namespace, $annotationName) {
-        if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment, $this->nsAliases);
+        //if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment, $this->nsAliases);
+        if (null === $this->annotations) $this->loadAnnotations();
 
         if (isset($this->annotations[$namespace]) && isset($this->annotations[$namespace][$annotationName])) {
             $value = $this->annotations[$namespace][$annotationName];
@@ -69,7 +93,8 @@ class StdObjectAnnotations implements IObjectAnnotations {
     }
 
     public function getValues($namespace, $annotationName) {
-        if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment, $this->nsAliases);
+        //if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment, $this->nsAliases);
+        if (null === $this->annotations) $this->loadAnnotations();
 
         if (isset($this->annotations[$namespace]) && isset($this->annotations[$namespace][$annotationName])) {
             $value = $this->annotations[$namespace][$annotationName];
@@ -84,7 +109,8 @@ class StdObjectAnnotations implements IObjectAnnotations {
     }
 
     public function hasAnnotation($namespace, $annotationName) {
-        if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment, $this->nsAliases);
+        //if (null === $this->annotations) $this->annotations = self::fetchAnnotations($this->docComment, $this->nsAliases);
+        if (null === $this->annotations) $this->loadAnnotations();
 
         if (isset($this->annotations[$namespace]) && isset($this->annotations[$namespace][$annotationName])) {
             return true;
@@ -136,10 +162,10 @@ class StdObjectAnnotations implements IObjectAnnotations {
     }
 }
 
-class SimpleMinnotations implements IMinnotations {
+class StdMinnotations implements IMinnotations {
 
     protected $reflectionClassesByName = [];
-    protected $cache = [];
+    protected $runtimeCache = [];
 
     /**
      * Namespace aliases in form alias => namespace name
@@ -156,12 +182,21 @@ class SimpleMinnotations implements IMinnotations {
      */
     protected $strictNamespaces = [];
 
+    /**
+     * @var ICache
+     */
+    protected $cache;
+
     public function addNamespaceAlias($namespace, $alias) {
         $this->nsAliases[$alias] = $namespace;
     }
 
     public function setNamespaceStrictMode($namespace) {
         $this->strictNamespaces[$namespace] = true;
+    }
+
+    public function setCache(ICache $cache) {
+        $this->cache = $cache;
     }
 
     /**
@@ -176,28 +211,67 @@ class SimpleMinnotations implements IMinnotations {
 
     public function forClass($className) {
         $cacheKey = 'cls:' . $className;
-        if (!isset($this->cache[$cacheKey])) {
-            $rc = $this->getReflectionClass($className);
-            $this->cache[$cacheKey] = new StdObjectAnnotations($rc->getDocComment(), $this->nsAliases, $this->strictNamespaces);
+        if (!isset($this->runtimeCache[$cacheKey])) {
+            //$rc = $this->getReflectionClass($className);
+            $getDocComment = function() use($className) {return $this->getReflectionClass($className)->getDocComment();};
+            $this->runtimeCache[$cacheKey] = new StdObjectAnnotations($getDocComment, $this->nsAliases, $this->strictNamespaces, $this->cache, $cacheKey);
         }
-        return $this->cache[$cacheKey];
+        return $this->runtimeCache[$cacheKey];
     }
 
     public function forMethod($className, $methodName) {
-        $cacheKey = 'mth:' . $className . ';' . $methodName;
-        if (!isset($this->cache[$cacheKey])) {
-            $rc = $this->getReflectionClass($className)->getMethod($methodName);
-            $this->cache[$cacheKey] = new StdObjectAnnotations($rc->getDocComment(), $this->nsAliases, $this->strictNamespaces);
+        $cacheKey = 'mth:' . $className . '.' . $methodName;
+        if (!isset($this->runtimeCache[$cacheKey])) {
+            //$rc = $this->getReflectionClass($className)->getMethod($methodName);
+            $getDocComment = function() use ($className, $methodName) {return $this->getReflectionClass($className)->getMethod($methodName)->getDocComment();};
+            $this->runtimeCache[$cacheKey] = new StdObjectAnnotations($getDocComment, $this->nsAliases, $this->strictNamespaces, $this->cache, $cacheKey);
         }
-        return $this->cache[$cacheKey];
+        return $this->runtimeCache[$cacheKey];
     }
 
     public function forProperty($className, $propertyName) {
-        $cacheKey = 'prop:' . $className . ';' . $propertyName;
-        if (!isset($this->cache[$cacheKey])) {
-            $rc = $this->getReflectionClass($className)->getProperty($propertyName);
-            $this->cache[$cacheKey] = new StdObjectAnnotations($rc->getDocComment(), $this->nsAliases, $this->strictNamespaces);
+        $cacheKey = 'prop:' . $className . '.' . $propertyName;
+        if (!isset($this->runtimeCache[$cacheKey])) {
+            //$rc = $this->getReflectionClass($className)->getProperty($propertyName);
+            $getDocComment = function() use ($className, $propertyName) {return $this->getReflectionClass($className)->getProperty($propertyName)->getDocComment();};
+            $this->runtimeCache[$cacheKey] = new StdObjectAnnotations($getDocComment, $this->nsAliases, $this->strictNamespaces, $this->cache, $cacheKey);
         }
-        return $this->cache[$cacheKey];
+        return $this->runtimeCache[$cacheKey];
+    }
+}
+
+
+class SerializedFileCache implements ICache {
+
+    protected $data;
+    protected $fileName;
+    protected $dirty = false;
+
+    public function __construct($fileName) {
+        $this->fileName = $fileName;
+    }
+
+    public function __destruct() {
+        if ($this->dirty) {
+            file_put_contents($this->fileName, serialize($this->data));
+        }
+    }
+
+    public function get($cacheKey, $property, $calcCallback) {
+        if (null === $this->data) {
+            if (file_exists($this->fileName)) {
+                $this->data = unserialize(file_get_contents($this->fileName));
+            } else {
+                $this->data = [];
+            }
+        }
+        $dataKey = $property . '@' . $cacheKey;
+        if (isset($this->data[$dataKey])) {
+            return unserialize($this->data[$dataKey]);
+        }
+        $value = call_user_func($calcCallback);
+        $this->data[$dataKey] = serialize($value);
+        $this->dirty = true;
+        return $value;
     }
 }
